@@ -4,8 +4,8 @@ Reusable GitHub Actions workflows for frontend projects: build once, then run
 quality gates on the same artifact. Framework-agnostic — it works with any
 project whose build produces a static output directory.
 
-> Status: pre-release. `v1.0.0` ships the build workflow and quality gates.
-> AI code review arrives in `v1.1`.
+> `v1.0.0` ships the build workflow and quality gates. AI code review is
+> planned for `v1.1`.
 
 ## Usage
 
@@ -154,6 +154,20 @@ npm test          # unit tests (node:test, no dependencies)
 calls the reusable workflows against it exactly as a consumer would.
 `fixtures/a11y-broken` is deliberately inaccessible, so CI can prove the
 accessibility gate fails.
+
+## Versioning
+
+Releases follow [semantic versioning](https://semver.org/). A **major** version
+is required for anything that can break a caller, including:
+
+- removing or renaming an input or output, or changing its default behaviour;
+- renaming a job, because required status checks match on job names;
+- requiring broader `permissions`.
+
+Releases are **immutable**: once published, a release tag cannot be moved or
+deleted, and GitHub attaches a signed release attestation. Pin the commit SHA
+of a release and let Dependabot propose upgrades. See
+[verifying the integrity of a release](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/verify-release-integrity).
 
 ## Roadmap
 
