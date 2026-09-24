@@ -1,0 +1,22 @@
+name: Bundle size budget
+description: Fail when the gzipped JS + CSS in a build directory exceeds a budget. HTML is reported but not budgeted.
+
+inputs:
+  dir:
+    description: Build directory, relative to the workspace.
+    required: false
+    default: dist
+  budget-kb:
+    description: Maximum gzipped JS + CSS, in KB.
+    required: false
+    default: "250"
+
+runs:
+  using: composite
+  steps:
+    - name: Check bundle size
+      shell: bash
+      env:
+        BUNDLE_DIR: ${{ inputs.dir }}
+        BUNDLE_BUDGET_KB: ${{ inputs.budget-kb }}
+      run: node "$GITHUB_ACTION_PATH/bundle-size.mjs"

@@ -31,7 +31,10 @@
           { "context": "Lint workflows" },
           { "context": "Unit tests" },
           { "context": "Self-test build / build" },
-          { "context": "Verify build artifact" }
+          { "context": "Verify build artifact" },
+          { "context": "Self-test quality / bundle" },
+          { "context": "Self-test quality / a11y" },
+          { "context": "Gates fail on bad input" }
         ]
       }
     }

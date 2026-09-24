@@ -8,3 +8,11 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /actions/a11y
+    schedule:
+      interval: weekly
+    groups:
+      a11y:
+        patterns: ["*"]

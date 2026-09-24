@@ -80,3 +80,97 @@ jobs:
             test -s "dist/$file" || { echo "::error::Missing dist/$file"; exit 1; }
           done
           grep -q '<loc>https://example.com/fixture/about/</loc>' dist/sitemap-0.xml
+
+  self-test-quality:
+    name: Self-test quality
+    needs: self-test-build
+    uses: ./.github/workflows/quality.yml
+    with:
+      artifact-name: ${{ needs.self-test-build.outputs.artifact-name }}
+      base-path: /fixture/
+      bundle-budget-kb: 10
+
+  # A gate that has only ever been seen passing proves nothing: each one must
+  # also be shown to fail on input it should reject.
+  gates-must-fail:
+    name: Gates fail on bad input
+    needs: self-test-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Download build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.self-test-build.outputs.artifact-name }}
+          path: dist
+
+      - name: Bundle over budget
+        id: over-budget
+        continue-on-error: true
+        uses: ./actions/bundle-size
+        with:
+          dir: dist
+          budget-kb: "0.01"
+
+      - name: Bundle with an invalid budget
+        id: invalid-budget
+        continue-on-error: true
+        uses: ./actions/bundle-size
+        with:
+          dir: dist
+          budget-kb: abc
+
+      - name: Serve the deliberately broken site
+        id: serve
+        uses: ./actions/serve
+        with:
+          dir: fixtures/a11y-broken
+          base-path: /broken/
+          port: "4322"
+
+      - name: Accessibility on the broken site
+        id: broken-a11y
+        continue-on-error: true
+        uses: ./actions/a11y
+        with:
+          dir: fixtures/a11y-broken
+          base-path: /broken/
+          origin: ${{ steps.serve.outputs.origin }}
+
+      - name: Accessibility with a wrong base path
+        id: wrong-base
+        continue-on-error: true
+        uses: ./actions/a11y
+        with:
+          dir: fixtures/a11y-broken
+          base-path: /not-the-base/
+          origin: ${{ steps.serve.outputs.origin }}
+
+      - name: Every gate must have failed
+        env:
+          OVER_BUDGET: ${{ steps.over-budget.outcome }}
+          INVALID_BUDGET: ${{ steps.invalid-budget.outcome }}
+          BROKEN_A11Y: ${{ steps.broken-a11y.outcome }}
+          WRONG_BASE: ${{ steps.wrong-base.outcome }}
+        run: |
+          set -euo pipefail
+          status=0
+          for check in OVER_BUDGET INVALID_BUDGET BROKEN_A11Y WRONG_BASE; do
+            if [ "${!check}" = "failure" ]; then
+              echo "ok: $check failed as expected"
+            else
+              echo "::error title=gates-must-fail::$check was '${!check}', expected 'failure'."
+              status=1
+            fi
+          done
+          exit "$status"
