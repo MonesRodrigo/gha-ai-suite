@@ -1,0 +1,126 @@
+name: Build (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing package.json, relative to the repository root.
+        required: false
+        default: "."
+        type: string
+      node-version:
+        description: Node.js version to use instead of the project's version file.
+        required: false
+        default: ""
+        type: string
+      build-command:
+        description: Command that builds the site. Defaults to `<package manager> run build`.
+        required: false
+        default: ""
+        type: string
+      output-dir:
+        description: Build output directory, relative to `working-directory`.
+        required: false
+        default: dist
+        type: string
+      artifact-name:
+        description: Name of the uploaded artifact.
+        required: false
+        default: dist
+        type: string
+      retention-days:
+        description: How long to keep the artifact.
+        required: false
+        default: 3
+        type: number
+    outputs:
+      artifact-name:
+        description: Name of the artifact produced by the build job.
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Keep this job id: callers see the check as `<their job name> / build`.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      artifact-name: ${{ steps.meta.outputs.artifact-name }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # An empty value would make checkout fall back to the caller's repository
+      # and run its `actions/` instead of this suite's, so fail closed.
+      - name: Resolve gha-ai-suite commit
+        env:
+          SUITE_REPOSITORY: ${{ job.workflow_repository }}
+          SUITE_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SUITE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ || ! "$SUITE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=build::Could not resolve the gha-ai-suite commit from job.workflow_*; refusing to load actions from an unknown ref."
+            exit 1
+          fi
+          echo "Loading gha-ai-suite actions from $SUITE_REPOSITORY@$SUITE_SHA"
+
+      # Loads this suite's actions from the exact commit the caller pinned.
+      - name: Check out gha-ai-suite actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .gha-ai-suite
+          sparse-checkout: actions
+          persist-credentials: false
+
+      - name: Set up Node project
+        id: setup
+        uses: ./.gha-ai-suite/actions/setup
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+          PACKAGE_MANAGER: ${{ steps.setup.outputs.package-manager }}
+        run: |
+          set -euo pipefail
+          if [ -n "$BUILD_COMMAND" ]; then
+            eval "$BUILD_COMMAND"
+          else
+            "$PACKAGE_MANAGER" run build
+          fi
+
+      - name: Verify build output
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          OUTPUT_DIR: ${{ inputs.output-dir }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
+            echo "::error title=build::Output directory '$OUTPUT_DIR' is missing or empty."
+            exit 1
+          fi
+
+      - name: Upload build output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.output-dir }}
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: error
+
+      - name: Expose artifact name
+        id: meta
+        env:
+          ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        run: echo "artifact-name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"

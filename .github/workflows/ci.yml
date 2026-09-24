@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint (checksum verified)
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfLO "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" actionlint
+
+      - name: Run actionlint
+        run: ./actionlint -color
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node project
+        uses: ./actions/setup
+
+      - name: Run unit tests
+        run: npm test
+
+  # Exercises the reusable workflow exactly as a consumer would call it.
+  self-test-build:
+    name: Self-test build
+    uses: ./.github/workflows/build.yml
+    with:
+      working-directory: fixtures/site
+      artifact-name: fixture-dist
+
+  verify-build:
+    name: Verify build artifact
+    needs: self-test-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.self-test-build.outputs.artifact-name }}
+          path: dist
+
+      - name: Check expected files
+        run: |
+          set -euo pipefail
+          for file in index.html about/index.html sitemap-0.xml assets/app.css assets/app.js; do
+            test -s "dist/$file" || { echo "::error::Missing dist/$file"; exit 1; }
+          done
+          grep -q '<loc>https://example.com/fixture/about/</loc>' dist/sitemap-0.xml
