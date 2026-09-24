@@ -1,0 +1,60 @@
+name: Setup Node project
+description: Detect npm or pnpm, set up Node from the project's version file and install dependencies from the lockfile.
+
+inputs:
+  working-directory:
+    description: Directory containing package.json, relative to the workspace.
+    required: false
+    default: "."
+  node-version:
+    description: Node.js version to use instead of the project's version file.
+    required: false
+    default: ""
+  install:
+    description: Whether to install dependencies (`true` or `false`).
+    required: false
+    default: "true"
+
+outputs:
+  package-manager:
+    description: Detected package manager, `npm` or `pnpm`.
+    value: ${{ steps.detect.outputs.package-manager }}
+
+runs:
+  using: composite
+  steps:
+    # Runs on the runner's preinstalled Node; the script only uses stable core APIs.
+    - name: Detect package manager and Node version
+      id: detect
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: node "$GITHUB_ACTION_PATH/detect.mjs"
+
+    # Must run before setup-node, otherwise `cache: pnpm` cannot find the store.
+    - name: Set up pnpm
+      if: steps.detect.outputs.package-manager == 'pnpm'
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      with:
+        package_json_file: ${{ steps.detect.outputs.package-json }}
+
+    - name: Set up Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        node-version-file: ${{ inputs.node-version == '' && steps.detect.outputs.node-version-file || '' }}
+        cache: ${{ steps.detect.outputs.package-manager }}
+        cache-dependency-path: ${{ steps.detect.outputs.lockfile }}
+
+    - name: Install dependencies
+      if: inputs.install == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PACKAGE_MANAGER: ${{ steps.detect.outputs.package-manager }}
+      run: |
+        set -euo pipefail
+        case "$PACKAGE_MANAGER" in
+          pnpm) pnpm install --frozen-lockfile ;;
+          npm) npm ci ;;
+        esac

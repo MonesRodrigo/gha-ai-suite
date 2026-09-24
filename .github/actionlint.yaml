@@ -1,0 +1,5 @@
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      # Documented by GitHub but not yet in actionlint 1.7.12's schema.
+      - 'property "workflow_(repository|sha)" is not defined'
