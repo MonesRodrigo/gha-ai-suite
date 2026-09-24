@@ -28,6 +28,14 @@ jobs:
         with:
           name: ${{ needs.build.outputs.artifact-name }}
           path: dist
+
+  quality:
+    name: Quality
+    needs: build
+    uses: MonesRodrigo/gha-ai-suite/.github/workflows/quality.yml@<commit-sha> # v1.0.0
+    with:
+      artifact-name: ${{ needs.build.outputs.artifact-name }}
+      base-path: /my-project/
 ```
 
 The build job keeps the id `build`, so your required status check is reported
@@ -55,6 +63,39 @@ build and uploads the output directory as an artifact.
 
 Required permissions: `contents: read`.
 
+### `quality.yml`
+
+Runs three independent jobs against the build artifact, so every gate inspects
+exactly what will be deployed. Each can be switched off.
+
+| Job | What it checks | Fails when |
+| :-- | :-- | :-- |
+| `bundle` | Gzipped JS + CSS (HTML is reported, not budgeted) | The total exceeds `bundle-budget-kb` |
+| `a11y` | axe on **every page in the sitemap** | A violation matches `a11y-fail-on`, a sitemap page does not load, or no page can be discovered |
+| `lighthouse` | Lighthouse CI, several runs per URL | An assertion at `error` level fails (the default config only warns) |
+
+| Input | Default | Description |
+| :-- | :-- | :-- |
+| `artifact-name` | `dist` | Artifact to test, usually `needs.build.outputs.artifact-name`. |
+| `base-path` | `/` | Base path the site is published under. |
+| `bundle` / `a11y` / `lighthouse` | `true` | Toggle each job. |
+| `bundle-budget-kb` | `250` | Maximum gzipped JS + CSS. |
+| `a11y-fail-on` | `critical,serious` | axe impact levels that fail the job. |
+| `a11y-tags` | `wcag2a,wcag2aa,wcag21aa` | axe rule tags. |
+| `a11y-sitemap` | *(auto)* | `sitemap-index.xml`, `sitemap.xml` or `sitemap-0.xml`. Indexes are followed. |
+| `lighthouse-paths` | *(base path)* | Comma-separated URL paths to audit. |
+| `lighthouse-runs` | `3` | Runs per URL; CI hardware is noisy. |
+| `lighthouse-config` | *(warn-only)* | A `lighthouserc.json` in your repository. |
+| `lighthouse-public-storage` | `false` | Upload reports to public temporary storage. |
+
+| Output | Description |
+| :-- | :-- |
+| `a11y-report` | Artifact with the axe SARIF report. |
+
+Required permissions: `contents: read`. To show accessibility findings in code
+scanning, download the `a11y-report` artifact in your own job and upload it with
+`github/codeql-action/upload-sarif`, granting `security-events: write` there.
+
 ## Actions
 
 ### `actions/setup`
@@ -68,6 +109,22 @@ installs dependencies with `npm ci` or `pnpm install --frozen-lockfile`.
   the exact version is installed.
 - Yarn is not supported yet.
 
+### `actions/serve`
+
+Serves a static directory on `127.0.0.1` under a base path, in the background,
+for the rest of the job. Only `GET` and `HEAD` are allowed, and requests can
+never resolve outside the served directory, including through symlinks.
+
+### `actions/bundle-size`
+
+Fails when gzipped JS + CSS exceeds `budget-kb`. An invalid budget fails the
+step instead of silently disabling the gate.
+
+### `actions/a11y`
+
+Runs axe with Playwright on every page listed in the sitemap. Its dependencies
+are pinned in a committed lockfile and installed with `npm ci --ignore-scripts`.
+
 ## Security model
 
 - **Pinned end to end.** Reusable workflows check out this suite's own actions
@@ -80,6 +137,9 @@ installs dependencies with `npm ci` or `pnpm install --frozen-lockfile`.
   updated by Dependabot.
 - **Linted.** CI runs `actionlint` (with `shellcheck`) from a checksum-verified
   release.
+- **Gates proven to fail.** CI feeds each gate input it must reject (an
+  inaccessible page, an impossible budget, a wrong base path) and fails if any
+  of them passes. A check that has only ever been seen green proves nothing.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
@@ -92,6 +152,8 @@ npm test          # unit tests (node:test, no dependencies)
 
 `fixtures/site` is a dependency-free static site served under `/fixture/`. CI
 calls the reusable workflows against it exactly as a consumer would.
+`fixtures/a11y-broken` is deliberately inaccessible, so CI can prove the
+accessibility gate fails.
 
 ## Roadmap
 

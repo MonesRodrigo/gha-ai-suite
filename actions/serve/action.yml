@@ -1,0 +1,58 @@
+name: Serve static build
+description: Serve a static build directory on 127.0.0.1 under a base path, in the background, for the rest of the job.
+
+inputs:
+  dir:
+    description: Directory to serve, relative to the workspace.
+    required: false
+    default: dist
+  base-path:
+    description: Base path the site is published under, for example `/my-project/`.
+    required: false
+    default: /
+  port:
+    description: Local port to listen on.
+    required: false
+    default: "4321"
+
+outputs:
+  origin:
+    description: Server origin, for example `http://127.0.0.1:4321`.
+    value: ${{ steps.address.outputs.origin }}
+  url:
+    description: Site root including the base path.
+    value: ${{ steps.address.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      id: address
+      shell: bash
+      env:
+        SERVE_DIR: ${{ inputs.dir }}
+        SERVE_BASE: ${{ inputs.base-path }}
+        SERVE_PORT: ${{ inputs.port }}
+      run: node "$GITHUB_ACTION_PATH/serve.mjs" --url
+
+    - name: Start server
+      shell: bash
+      env:
+        SERVE_DIR: ${{ inputs.dir }}
+        SERVE_BASE: ${{ inputs.base-path }}
+        SERVE_PORT: ${{ inputs.port }}
+        SERVE_URL: ${{ steps.address.outputs.url }}
+      run: |
+        set -euo pipefail
+        log="$RUNNER_TEMP/gha-ai-suite-serve.log"
+        nohup node "$GITHUB_ACTION_PATH/serve.mjs" > "$log" 2>&1 &
+        for _ in $(seq 1 50); do
+          if [ "$(curl -s -o /dev/null -w '%{http_code}' "$SERVE_URL" || true)" != "000" ]; then
+            cat "$log"
+            exit 0
+          fi
+          sleep 0.2
+        done
+        cat "$log"
+        echo "::error title=serve::Server did not start at $SERVE_URL."
+        exit 1

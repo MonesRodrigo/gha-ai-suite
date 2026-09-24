@@ -1,0 +1,291 @@
+name: Quality (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: Build artifact to test, usually the `artifact-name` output of build.yml.
+        required: false
+        default: dist
+        type: string
+      base-path:
+        description: Base path the site is published under, for example `/my-project/`.
+        required: false
+        default: /
+        type: string
+      bundle:
+        description: Run the bundle size budget.
+        required: false
+        default: true
+        type: boolean
+      bundle-budget-kb:
+        description: Maximum gzipped JS + CSS, in KB.
+        required: false
+        default: 250
+        type: number
+      a11y:
+        description: Run the axe accessibility audit.
+        required: false
+        default: true
+        type: boolean
+      a11y-fail-on:
+        description: Comma-separated axe impact levels that fail the check.
+        required: false
+        default: critical,serious
+        type: string
+      a11y-tags:
+        description: Comma-separated axe rule tags to run.
+        required: false
+        default: wcag2a,wcag2aa,wcag21aa
+        type: string
+      a11y-sitemap:
+        description: Sitemap file inside the build. Detected automatically when empty.
+        required: false
+        default: ""
+        type: string
+      lighthouse:
+        description: Run Lighthouse CI.
+        required: false
+        default: true
+        type: boolean
+      lighthouse-paths:
+        description: Comma-separated URL paths to audit. Defaults to the base path.
+        required: false
+        default: ""
+        type: string
+      lighthouse-runs:
+        description: Lighthouse runs per URL. CI hardware is noisy, so use at least 3.
+        required: false
+        default: 3
+        type: number
+      lighthouse-config:
+        description: Path to a lighthouserc.json in your repository. Defaults to warn-only assertions.
+        required: false
+        default: ""
+        type: string
+      lighthouse-public-storage:
+        description: Upload reports to Lighthouse's temporary public storage. Anyone with the link can read them.
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      a11y-report:
+        description: Name of the artifact holding the axe SARIF report.
+        value: ${{ jobs.a11y.outputs.report }}
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    if: inputs.bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Resolve gha-ai-suite commit
+        env:
+          SUITE_REPOSITORY: ${{ job.workflow_repository }}
+          SUITE_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SUITE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ || ! "$SUITE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=quality::Could not resolve the gha-ai-suite commit from job.workflow_*; refusing to load actions from an unknown ref."
+            exit 1
+          fi
+
+      - name: Check out gha-ai-suite actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .gha-ai-suite
+          sparse-checkout: actions
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Download build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: dist
+
+      - name: Check bundle size
+        uses: ./.gha-ai-suite/actions/bundle-size
+        with:
+          dir: dist
+          budget-kb: ${{ inputs.bundle-budget-kb }}
+
+  a11y:
+    if: inputs.a11y
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.meta.outputs.report }}
+    steps:
+      - name: Resolve gha-ai-suite commit
+        env:
+          SUITE_REPOSITORY: ${{ job.workflow_repository }}
+          SUITE_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SUITE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ || ! "$SUITE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=quality::Could not resolve the gha-ai-suite commit from job.workflow_*; refusing to load actions from an unknown ref."
+            exit 1
+          fi
+
+      - name: Check out gha-ai-suite actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .gha-ai-suite
+          sparse-checkout: actions
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Download build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: dist
+
+      - name: Serve build output
+        id: serve
+        uses: ./.gha-ai-suite/actions/serve
+        with:
+          dir: dist
+          base-path: ${{ inputs.base-path }}
+
+      - name: Audit accessibility
+        uses: ./.gha-ai-suite/actions/a11y
+        with:
+          dir: dist
+          base-path: ${{ inputs.base-path }}
+          origin: ${{ steps.serve.outputs.origin }}
+          sitemap: ${{ inputs.a11y-sitemap }}
+          tags: ${{ inputs.a11y-tags }}
+          fail-on: ${{ inputs.a11y-fail-on }}
+          sarif-file: a11y.sarif
+
+      - name: Name the report artifact
+        id: meta
+        if: always()
+        env:
+          REPORT: ${{ inputs.artifact-name }}-a11y
+        run: echo "report=$REPORT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload accessibility report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.meta.outputs.report }}
+          path: a11y.sarif
+          retention-days: 7
+          if-no-files-found: ignore
+
+  lighthouse:
+    if: inputs.lighthouse
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # Only needed to read a custom lighthouserc.json from the caller's repository.
+      - name: Check out repository
+        if: inputs.lighthouse-config != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve gha-ai-suite commit
+        env:
+          SUITE_REPOSITORY: ${{ job.workflow_repository }}
+          SUITE_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SUITE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ || ! "$SUITE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=quality::Could not resolve the gha-ai-suite commit from job.workflow_*; refusing to load actions from an unknown ref."
+            exit 1
+          fi
+
+      - name: Check out gha-ai-suite actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .gha-ai-suite
+          sparse-checkout: actions
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Download build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: dist
+
+      - name: Serve build output
+        id: serve
+        uses: ./.gha-ai-suite/actions/serve
+        with:
+          dir: dist
+          base-path: ${{ inputs.base-path }}
+
+      - name: Resolve Lighthouse URLs and config
+        id: lighthouse
+        env:
+          ORIGIN: ${{ steps.serve.outputs.origin }}
+          SITE_URL: ${{ steps.serve.outputs.url }}
+          PATHS: ${{ inputs.lighthouse-paths }}
+          CONFIG: ${{ inputs.lighthouse-config }}
+        run: |
+          set -euo pipefail
+          base="${SITE_URL#"$ORIGIN"}"
+          urls=""
+          IFS=',' read -ra paths <<< "${PATHS:-$base}"
+          for path in "${paths[@]}"; do
+            path="$(echo "$path" | xargs)"
+            if [[ ! "$path" =~ ^/[A-Za-z0-9._~/%-]*$ ]]; then
+              echo "::error title=lighthouse::Invalid path '$path'. Use absolute URL paths such as /my-project/about/."
+              exit 1
+            fi
+            urls+="${ORIGIN}${path}"$'\n'
+          done
+          config="${CONFIG:-.gha-ai-suite/actions/lighthouse/lighthouserc.json}"
+          if [[ "$config" == *..* || ! -f "$config" ]]; then
+            echo "::error title=lighthouse::Lighthouse config '$config' not found in the repository."
+            exit 1
+          fi
+          delimiter="EOF_$(openssl rand -hex 8)"
+          {
+            echo "urls<<$delimiter"
+            printf '%s' "$urls"
+            echo "$delimiter"
+            echo "config=$config"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Lighthouse CI
+        uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # v12
+        with:
+          urls: ${{ steps.lighthouse.outputs.urls }}
+          configPath: ${{ steps.lighthouse.outputs.config }}
+          runs: ${{ inputs.lighthouse-runs }}
+          uploadArtifacts: true
+          artifactName: ${{ inputs.artifact-name }}-lighthouse
+          temporaryPublicStorage: ${{ inputs.lighthouse-public-storage }}

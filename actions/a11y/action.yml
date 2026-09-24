@@ -1,0 +1,55 @@
+name: Accessibility audit
+description: Run axe on every page listed in a static build's sitemap and fail on the selected impact levels.
+
+inputs:
+  dir:
+    description: Build directory, relative to the workspace.
+    required: false
+    default: dist
+  base-path:
+    description: Base path the site is published under, for example `/my-project/`.
+    required: false
+    default: /
+  origin:
+    description: Origin of a server already serving `dir`, for example the `origin` output of the serve action.
+    required: true
+  sitemap:
+    description: Sitemap file inside `dir`. Defaults to sitemap-index.xml, sitemap.xml or sitemap-0.xml, whichever exists.
+    required: false
+    default: ""
+  tags:
+    description: Comma-separated axe rule tags to run.
+    required: false
+    default: wcag2a,wcag2aa,wcag21aa
+  fail-on:
+    description: Comma-separated impact levels that fail the check.
+    required: false
+    default: critical,serious
+  sarif-file:
+    description: Where to write the SARIF report, relative to the workspace.
+    required: false
+    default: a11y.sarif
+
+runs:
+  using: composite
+  steps:
+    # Versions come from the committed lockfile; install scripts are not run.
+    - name: Install axe and Playwright
+      shell: bash
+      run: npm ci --prefix "$GITHUB_ACTION_PATH" --ignore-scripts --no-audit --no-fund
+
+    - name: Install Chromium
+      shell: bash
+      run: '"$GITHUB_ACTION_PATH/node_modules/.bin/playwright" install --with-deps chromium'
+
+    - name: Run axe
+      shell: bash
+      env:
+        A11Y_DIR: ${{ inputs.dir }}
+        A11Y_BASE: ${{ inputs.base-path }}
+        A11Y_ORIGIN: ${{ inputs.origin }}
+        A11Y_SITEMAP: ${{ inputs.sitemap }}
+        A11Y_TAGS: ${{ inputs.tags }}
+        A11Y_FAIL_ON: ${{ inputs.fail-on }}
+        A11Y_SARIF: ${{ inputs.sarif-file }}
+      run: node "$GITHUB_ACTION_PATH/a11y.mjs"
